@@ -85,6 +85,8 @@ class Sticky(tk.Tk):
         self.entry.bind("<Return>", self.add)
         self.paste_btn = tk.Label(body, bg=HOVER, fg=ACCENT, font=BOLD, pady=5, cursor="hand2")
         self.paste_btn.bind("<Button-1>", lambda e: self.paste())
+        self.carry_btn = tk.Label(body, bg=HOVER, fg=ACCENT, font=BOLD, pady=5, cursor="hand2")
+        self.carry_btn.bind("<Button-1>", lambda e: self.carry())
         self.canvas = tk.Canvas(body, bg=PAPER, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=6, pady=(8, 0))
         self.list = tk.Frame(self.canvas, bg=PAPER)
@@ -163,6 +165,13 @@ class Sticky(tk.Tk):
             self.paste_btn.pack(side="bottom", fill="x", padx=10, pady=(4, 0), before=self.canvas)
         else:
             self.paste_btn.pack_forget()
+        key = self.day.isoformat()
+        older = sum(not t.get("done") for k, v in self.tasks.items() if k < key for t in v)
+        if older:
+            self.carry_btn.config(text=f"⤒  Bring {older} unfinished task{'s' * (older > 1)} from earlier days")
+            self.carry_btn.pack(fill="x", padx=10, pady=(8, 0), before=self.canvas)
+        else:
+            self.carry_btn.pack_forget()
         self.canvas.yview_moveto(0)
 
     def add_row(self, t):
@@ -224,6 +233,15 @@ class Sticky(tk.Tk):
     def paste(self):
         self.day_tasks().extend(self.clip)
         self.clip.clear()
+        self.render()
+        self.schedule_save()
+
+    def carry(self):
+        target, key = self.day_tasks(), self.day.isoformat()
+        for k, v in self.tasks.items():
+            if k < key:
+                target.extend(t for t in v if not t.get("done"))
+                v[:] = [t for t in v if t.get("done")]
         self.render()
         self.schedule_save()
 
