@@ -2,7 +2,9 @@
 Type=Application
 Name=Sticky Note
 Comment=Always-on-top autosaving task note
-Exec=python3 "/home/mahin/pet projects/sticky-note/sticky.py"
+Exec=/usr/bin/python3 "/home/mahin/pet projects/sticky-note/sticky.py"
 Icon=accessories-text-editor
 Terminal=false
 Categories=Utility;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

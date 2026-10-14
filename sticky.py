@@ -10,9 +10,14 @@ from datetime import date, timedelta
 from pathlib import Path
 
 DATA = Path.home() / ".sticky_note.json"
-BG, BAR, FG, MUTED = "#fff8b0", "#f5e67a", "#333333", "#9a8f4a"
-FONT = ("Sans", 11)
-FADED_ALPHA = 0.35
+RAISE = Path.home() / ".sticky_note.raise"
+PAPER, HEAD, HOVER = "#fff9db", "#ffe066", "#fff3bf"
+INK, MUTED, ACCENT, BORDER = "#3d3a2e", "#a39e7a", "#e8590c", "#e6c84f"
+FONT = ("Ubuntu", 11)
+BOLD = ("Ubuntu", 11, "bold")
+CHECK = ("DejaVu Sans", 13)
+PLACEHOLDER = "Add a task…"
+FADED_ALPHA = 0.55
 
 
 class Sticky(tk.Tk):
@@ -25,52 +30,113 @@ class Sticky(tk.Tk):
         self.tasks = self.data.setdefault("tasks", {})
         self.clip = self.data.setdefault("clip", [])
         s = self.data.setdefault("settings", {})
+        self.on_top = s.get("on_top", True)
+        self.faded = s.get("faded", False)
+        self.full_size = s.get("size", "320x440")
         self.day = date.today()
         self.save_job = None
-        self.alpha = None
+        self.alpha = 1.0
         self.collapsed = False
-        self.full_size = s.get("size", "320x420")
+        self.drag = None
 
         self.title("Sticky Note")
-        self.configure(bg=BG)
-        self.geometry(self.full_size + s.get("pos", ""))
-        self.on_top = tk.BooleanVar(value=s.get("on_top", True))
-        self.faded = tk.BooleanVar(value=s.get("faded", False))
+        self.attributes("-type", "splash")
+        self.configure(bg=BORDER, padx=1, pady=1)
+        self.geometry(self.full_size + s.get("pos", "-40+60"))
+        self.minsize(240, 0)
 
-        self.bar = bar = tk.Frame(self, bg=BAR)
-        bar.pack(fill="x")
-        style = dict(bg=BAR, fg=FG, relief="flat", bd=0, padx=6, highlightthickness=0, activebackground=BG)
-        tk.Button(bar, text="◀", command=lambda: self.go(-1), **style).pack(side="left")
-        self.date_lbl = tk.Label(bar, bg=BAR, fg=FG, font=FONT + ("bold",), cursor="hand2")
+        self.head = tk.Frame(self, bg=HEAD)
+        self.head.pack(fill="x")
+        self.top = top = tk.Frame(self.head, bg=HEAD)
+        top.pack(fill="x", padx=6, pady=4)
+        self.summary = tk.Label(top, bg=HEAD, fg=INK, font=BOLD, anchor="w")
+        self.summary.pack(side="left", fill="x", expand=True, padx=4)
+        self.icon(top, "✕", self.close)
+        self.icon(top, "—", self.toggle_collapse)
+        self.pin_btn = self.icon(top, "pin", lambda: self.toggle("on_top"))
+        self.fade_btn = self.icon(top, "fade", lambda: self.toggle("faded"))
+
+        self.navbox = tk.Frame(self.head, bg=HEAD)
+        self.navbox.pack(fill="x")
+        nav = tk.Frame(self.navbox, bg=HEAD)
+        nav.pack(fill="x", padx=6, pady=(0, 6))
+        self.icon(nav, "‹", lambda: self.go(-1), side="left", font=("Ubuntu", 15, "bold"))
+        self.icon(nav, "›", lambda: self.go(1), side="right", font=("Ubuntu", 15, "bold"))
+        self.date_lbl = tk.Label(nav, bg=HEAD, fg=INK, font=FONT, cursor="hand2")
         self.date_lbl.pack(side="left", expand=True)
         self.date_lbl.bind("<Button-1>", lambda e: self.go(None))
-        tk.Button(bar, text="—", command=self.toggle_collapse, **style).pack(side="right")
-        for text, var in (("Fade", self.faded), ("Pin", self.on_top)):
-            tk.Checkbutton(bar, text=text, variable=var, indicatoron=False, selectcolor=BG,
-                           command=self.apply_settings, **style).pack(side="right")
-        tk.Button(bar, text="▶", command=lambda: self.go(1), **style).pack(side="right")
+        progress = tk.Frame(self.navbox, bg=BORDER, height=3)
+        progress.pack(fill="x")
+        self.progress = tk.Frame(progress, bg=ACCENT)
 
-        self.body = body = tk.Frame(self, bg=BG)
+        for w in (self.head, top, self.summary, nav):
+            w.bind("<Button-1>", self.start_drag)
+            w.bind("<B1-Motion>", lambda e: self.geometry(f"+{e.x_root - self.drag[0]}+{e.y_root - self.drag[1]}"))
+            w.bind("<ButtonRelease-1>", lambda e: setattr(self, "drag", None))
+
+        self.body = body = tk.Frame(self, bg=PAPER)
         body.pack(fill="both", expand=True)
-        self.entry = tk.Entry(body, bg="#fffbd6", fg=FG, relief="flat", font=FONT, insertbackground=FG)
-        self.entry.pack(side="bottom", fill="x", padx=4, pady=4, ipady=3)
+        self.entry = tk.Entry(body, bg="#fffdf0", fg=MUTED, font=FONT, relief="flat", highlightthickness=1,
+                              highlightbackground=BORDER, highlightcolor=ACCENT, insertbackground=INK)
+        self.entry.pack(side="bottom", fill="x", padx=(10, 16), pady=(4, 10), ipady=5)
+        self.entry.insert(0, PLACEHOLDER)
+        self.entry.bind("<FocusIn>", self.placeholder)
+        self.entry.bind("<FocusOut>", self.placeholder)
         self.entry.bind("<Return>", self.add)
-        self.canvas = tk.Canvas(body, bg=BG, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.paste_btn = tk.Button(body, command=self.paste, **{**style, "bg": "#ffe08a"})
-        self.list = tk.Frame(self.canvas, bg=BG)
+        self.paste_btn = tk.Label(body, bg=HOVER, fg=ACCENT, font=BOLD, pady=5, cursor="hand2")
+        self.paste_btn.bind("<Button-1>", lambda e: self.paste())
+        self.canvas = tk.Canvas(body, bg=PAPER, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=6, pady=(8, 0))
+        self.list = tk.Frame(self.canvas, bg=PAPER)
         win = self.canvas.create_window(0, 0, window=self.list, anchor="nw")
         self.list.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(win, width=e.width))
         self.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         self.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        grip = tk.Label(body, text="◢", bg=PAPER, fg=BORDER, font=("DejaVu Sans", 9), cursor="bottom_right_corner")
+        grip.place(relx=1, rely=1, anchor="se")
+        grip.bind("<Button-1>", lambda e: setattr(self, "drag", (0, 0)))
+        grip.bind("<B1-Motion>", self.resize)
+        grip.bind("<ButtonRelease-1>", lambda e: setattr(self, "drag", None))
 
         self.bind("<Configure>", lambda e: e.widget is self and self.schedule_save())
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        self.apply_settings()
+        self.refresh_toggles()
         self.render()
         self.poll()
-        self.entry.focus_set()
+
+    def icon(self, parent, text, cmd, side="right", font=("Ubuntu", 10, "bold")):
+        b = tk.Label(parent, text=text, bg=HEAD, fg=INK, font=font, padx=7, pady=1, cursor="hand2")
+        b.base = HEAD
+        b.pack(side=side, padx=1)
+        b.bind("<Button-1>", lambda e: cmd())
+        b.bind("<Enter>", lambda e: b.config(bg=BORDER))
+        b.bind("<Leave>", lambda e: b.config(bg=b.base))
+        return b
+
+    def toggle(self, name):
+        setattr(self, name, not getattr(self, name))
+        self.refresh_toggles()
+        self.schedule_save()
+
+    def refresh_toggles(self):
+        self.attributes("-topmost", self.on_top)
+        for b, on in ((self.pin_btn, self.on_top), (self.fade_btn, self.faded)):
+            b.base = ACCENT if on else HEAD
+            b.config(bg=b.base, fg="white" if on else INK)
+
+    def start_drag(self, e):
+        self.drag = (e.x_root - self.winfo_x(), e.y_root - self.winfo_y())
+
+    def resize(self, e):
+        self.geometry(f"{max(240, e.x_root - self.winfo_rootx())}x{max(200, e.y_root - self.winfo_rooty())}")
+
+    def placeholder(self, e):
+        if e.type == tk.EventType.FocusIn and self.entry.cget("fg") == MUTED:
+            self.entry.delete(0, "end")
+            self.entry.config(fg=INK)
+        elif e.type == tk.EventType.FocusOut and not self.entry.get():
+            self.entry.insert(0, PLACEHOLDER)
+            self.entry.config(fg=MUTED)
 
     def day_tasks(self, day=None):
         return self.tasks.setdefault((day or self.day).isoformat(), [])
@@ -82,56 +148,68 @@ class Sticky(tk.Tk):
     def render(self):
         for w in self.list.winfo_children():
             w.destroy()
-        label = self.day.strftime("%a %d %b")
-        self.date_lbl.config(text=label + "  · Today" if self.day == date.today() else label)
-        for t in self.day_tasks():
+        tasks = self.day_tasks()
+        done = sum(t.get("done", False) for t in tasks)
+        rel = {0: "Today", 1: "Tomorrow", -1: "Yesterday"}.get((self.day - date.today()).days)
+        self.date_lbl.config(text=f"{rel} · {self.day:%a %d %b}" if rel else f"{self.day:%A, %d %b %Y}")
+        self.summary.config(text=f"{len(tasks) - done} to do · {done} done" if tasks else "Sticky Note")
+        self.progress.place(relheight=1, relwidth=done / len(tasks) if tasks else 0)
+        for t in sorted(tasks, key=lambda t: t.get("done", False)):
             self.add_row(t)
-        if not self.day_tasks():
-            tk.Label(self.list, text="No tasks — type below and press Enter", bg=BG, fg=MUTED).pack(pady=10)
+        if not tasks:
+            tk.Label(self.list, text="Nothing here yet", bg=PAPER, fg=MUTED, font=FONT + ("italic",)).pack(pady=24)
         if self.clip:
-            self.paste_btn.config(text=f"Paste {len(self.clip)} cut task(s) here")
-            self.paste_btn.pack(side="bottom", fill="x", padx=4, before=self.canvas)
+            self.paste_btn.config(text=f"⤓  Paste {len(self.clip)} cut task{'s' * (len(self.clip) > 1)} here")
+            self.paste_btn.pack(side="bottom", fill="x", padx=10, pady=(4, 0), before=self.canvas)
         else:
             self.paste_btn.pack_forget()
         self.canvas.yview_moveto(0)
 
     def add_row(self, t):
-        row = tk.Frame(self.list, bg=BG)
-        row.pack(fill="x", padx=4, pady=1)
-        done = tk.BooleanVar(value=t.get("done", False))
+        done = t.get("done", False)
+        row = tk.Frame(self.list, bg=PAPER)
+        row.pack(fill="x", pady=1)
+        chk = tk.Label(row, text="☑" if done else "☐", bg=PAPER, fg=ACCENT if done else MUTED, font=CHECK,
+                       cursor="hand2", padx=4)
+        chk.pack(side="left")
+        rm = tk.Label(row, text="✕", bg=PAPER, fg=PAPER, font=("Ubuntu", 10), cursor="hand2", padx=6)
+        rm.pack(side="right")
         text = tk.StringVar(value=t["text"])
-        e = tk.Entry(row, textvariable=text, bg=BG, relief="flat", highlightthickness=0, insertbackground=FG)
+        e = tk.Entry(row, textvariable=text, width=1, bg=PAPER, fg=MUTED if done else INK, relief="flat",
+                     highlightthickness=0, insertbackground=INK, font=FONT + ("overstrike",) if done else FONT)
+        e.pack(side="left", fill="x", expand=True, pady=3)
 
-        def restyle():
-            e.config(font=FONT + ("overstrike",) if done.get() else FONT, fg=MUTED if done.get() else FG)
-
-        def toggle():
-            t["done"] = done.get()
-            restyle()
+        def toggle(_):
+            t["done"] = not done
+            self.render()
             self.schedule_save()
 
         def edit(*_):
             t["text"] = text.get()
             self.schedule_save()
 
-        tk.Checkbutton(row, variable=done, command=toggle, bg=BG, activebackground=BG,
-                       highlightthickness=0, bd=0).pack(side="left")
-        tk.Button(row, text="×", command=lambda: self.move(t, None), bg=BG, fg=MUTED, relief="flat",
-                  bd=0, highlightthickness=0, activebackground=BAR).pack(side="right")
-        e.pack(side="left", fill="x", expand=True)
+        def hover(on):
+            for w in (row, chk, rm, e):
+                w.config(bg=HOVER if on else PAPER)
+            rm.config(fg=MUTED if on else PAPER)
+
+        chk.bind("<Button-1>", toggle)
+        rm.bind("<Button-1>", lambda ev: self.move(t, None))
         text.trace_add("write", edit)
-        restyle()
-        for w in (row, e):
+        for w in (row, chk, rm, e):
+            w.bind("<Enter>", lambda ev: hover(True))
+            w.bind("<Leave>", lambda ev: hover(False))
             w.bind("<Button-3>", lambda ev: self.menu(t, ev))
 
     def menu(self, t, ev):
-        m = tk.Menu(self, tearoff=0)
-        m.add_command(label="Cut (paste on another date)", command=lambda: self.move(t, None, cut=True))
-        m.add_command(label="Move to next day", command=lambda: self.move(t, self.day + timedelta(days=1)))
+        m = tk.Menu(self, tearoff=0, bg=PAPER, fg=INK, activebackground=HEAD, activeforeground=INK,
+                    font=FONT, bd=1, relief="solid")
+        m.add_command(label="  Cut — paste on another date", command=lambda: self.move(t, None, cut=True))
+        m.add_command(label="  Move to next day", command=lambda: self.move(t, self.day + timedelta(days=1)))
         if self.day != date.today():
-            m.add_command(label="Move to today", command=lambda: self.move(t, date.today()))
+            m.add_command(label="  Move to today", command=lambda: self.move(t, date.today()))
         m.add_separator()
-        m.add_command(label="Delete", command=lambda: self.move(t, None))
+        m.add_command(label="  Delete", foreground=ACCENT, command=lambda: self.move(t, None))
         m.tk_popup(ev.x_root, ev.y_root)
 
     def move(self, t, day, cut=False):
@@ -158,27 +236,32 @@ class Sticky(tk.Tk):
             self.canvas.after_idle(self.canvas.yview_moveto, 1)
             self.schedule_save()
 
-    def apply_settings(self):
-        self.attributes("-topmost", self.on_top.get())
-        self.schedule_save()
-
     def toggle_collapse(self):
         self.collapsed = not self.collapsed
         if self.collapsed:
             self.full_size = f"{self.winfo_width()}x{self.winfo_height()}"
+            self.navbox.pack_forget()
             self.body.pack_forget()
-            self.geometry(f"{self.winfo_width()}x{self.bar.winfo_height()}")
+            self.update_idletasks()
+            self.geometry(f"{self.winfo_width()}x{self.head.winfo_reqheight() + 2}")
         else:
+            self.navbox.pack(fill="x")
             self.body.pack(fill="both", expand=True)
             self.geometry(self.full_size)
 
     def poll(self):
-        inside = self.winfo_containing(*self.winfo_pointerxy()) is not None
-        alpha = FADED_ALPHA if self.faded.get() and not inside else 1.0
-        if alpha != self.alpha:
-            self.attributes("-alpha", alpha)
-            self.alpha = alpha
-        self.after(250, self.poll)
+        if RAISE.exists():
+            RAISE.unlink()
+            self.deiconify()
+            self.lift()
+        inside = self.drag or self.winfo_containing(*self.winfo_pointerxy()) is not None
+        target = 1.0 if inside or not self.faded else FADED_ALPHA
+        if self.alpha != target:
+            step = target - self.alpha
+            self.alpha = target if abs(step) < 0.06 else self.alpha + (0.06 if step > 0 else -0.06)
+            self.attributes("-alpha", self.alpha)
+            return self.after(15, self.poll)
+        self.after(200, self.poll)
 
     def schedule_save(self):
         if self.save_job:
@@ -189,7 +272,7 @@ class Sticky(tk.Tk):
         self.save_job = None
         size, pos = re.match(r"(\d+x\d+)(.*)", self.geometry()).groups()
         self.data["settings"] = {"size": self.full_size if self.collapsed else size, "pos": pos,
-                                 "on_top": self.on_top.get(), "faded": self.faded.get()}
+                                 "on_top": self.on_top, "faded": self.faded}
         for k in [k for k, v in self.tasks.items() if not v and k != self.day.isoformat()]:
             del self.tasks[k]
         tmp = DATA.with_suffix(".tmp")
@@ -206,5 +289,6 @@ if __name__ == "__main__":
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        sys.exit("Sticky Note is already running")
+        RAISE.touch()
+        sys.exit()
     Sticky().mainloop()
