@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sticky Note
+Comment=Always-on-top autosaving task note
+Exec=python3 "/home/mahin/pet projects/sticky-note/sticky.py"
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;
